@@ -102,7 +102,7 @@ export const defaultConfig: AiConfig = {
     resolution: "1k",
     size: "1:1",
     count: "1",
-    canvasImageCount: "3",
+    canvasImageCount: "1",
 };
 
 export const defaultWebdavSyncConfig: WebdavSyncConfig = {
@@ -234,7 +234,7 @@ export const useConfigStore = create<ConfigStore>()(
                         videoGenerateAudio: config.videoGenerateAudio || "true",
                         videoWatermark: config.videoWatermark || "false",
                         resolution: config.resolution || "1k",
-                        canvasImageCount: config.canvasImageCount || "3",
+                        canvasImageCount: config.canvasImageCount || defaultConfig.canvasImageCount,
                         imageModels: mergeSuggestedModelOptions(Array.isArray(persistedConfig.imageModels) ? normalizeModelList(config.imageModels, channels) : [], filterModelsByCapability(models, "image")),
                         videoModels: mergeSuggestedModelOptions(Array.isArray(persistedConfig.videoModels) ? normalizeModelList(config.videoModels, channels) : [], filterModelsByCapability(models, "video")),
                         textModels: mergeSuggestedModelOptions(Array.isArray(persistedConfig.textModels) ? normalizeModelList(config.textModels, channels) : [], filterModelsByCapability(models, "text")),

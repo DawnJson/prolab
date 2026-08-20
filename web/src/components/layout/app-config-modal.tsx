@@ -687,7 +687,7 @@ function normalizeDefaultModel(value: string, options: string[]) {
 }
 
 function normalizeImageCount(value: string) {
-    return String(Math.max(1, Math.min(15, Math.floor(Math.abs(Number(value)) || 3))));
+    return String(Math.max(1, Math.min(15, Math.floor(Math.abs(Number(value)) || 1))));
 }
 
 function uniqueModels(models: string[]) {

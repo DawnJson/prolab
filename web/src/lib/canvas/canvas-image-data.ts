@@ -34,6 +34,192 @@ export type ImageSplitPiece = {
     dataUrl: string;
 };
 
+export type ImageOutpaintPadding = {
+    top: number;
+    right: number;
+    bottom: number;
+    left: number;
+};
+
+export type ImageOutpaintLayout = ImageOutpaintPadding & {
+    width: number;
+    height: number;
+    sourceWidth: number;
+    sourceHeight: number;
+    imageDataUrl: string;
+    maskDataUrl: string;
+};
+
+type OutpaintBox = Pick<ImageOutpaintLayout, "left" | "top" | "right" | "bottom" | "sourceWidth" | "sourceHeight">;
+
+export function outpaintBlendPx(sourceWidth: number, sourceHeight: number) {
+    return Math.max(16, Math.min(64, Math.floor(Math.min(sourceWidth, sourceHeight) / 8)));
+}
+
+export function distanceToOutpaintSeam(x: number, y: number, layout: OutpaintBox) {
+    const x0 = layout.left;
+    const y0 = layout.top;
+    const x1 = x0 + layout.sourceWidth;
+    const y1 = y0 + layout.sourceHeight;
+    if (x < x0 || x >= x1 || y < y0 || y >= y1) return null;
+    let dist = Infinity;
+    if (layout.left > 0) dist = Math.min(dist, x - x0);
+    if (layout.right > 0) dist = Math.min(dist, x1 - x);
+    if (layout.top > 0) dist = Math.min(dist, y - y0);
+    if (layout.bottom > 0) dist = Math.min(dist, y1 - y);
+    return dist;
+}
+
+export function outpaintMaskKeepAlpha(x: number, y: number, layout: OutpaintBox, overlap: number) {
+    const dist = distanceToOutpaintSeam(x, y, layout);
+    if (dist == null) return 0;
+    if (!Number.isFinite(dist) || dist >= overlap) return 255;
+    return 0;
+}
+
+export function outpaintCompositeWeight(x: number, y: number, layout: OutpaintBox, feather: number) {
+    const dist = distanceToOutpaintSeam(x, y, layout);
+    if (dist == null) return 0;
+    if (!Number.isFinite(dist) || feather <= 0) return 1;
+    const t = Math.max(0, Math.min(1, dist / feather));
+    return t * t * (3 - 2 * t);
+}
+
+export function buildOutpaintPrompt(userPrompt = "") {
+    const extra = userPrompt.trim();
+    if (extra) {
+        return `只在图像透明空白的扩边蒙版区域生成：${extra}。原图矩形内必须保持原样、不要重绘，也不要把新主体画进原图。新主体必须完整落在蒙版区域内。`;
+    }
+    return "只在图像透明空白的扩边蒙版区域延续同一场景的背景、地面、墙面、光影和透视。原图矩形内保持不变，不要新增人物、动物或物体。";
+}
+
+export function centerOutpaintPadding(sourceWidth: number, sourceHeight: number, outputWidth: number, outputHeight: number): ImageOutpaintPadding {
+    const extraW = Math.max(0, Math.round(outputWidth) - sourceWidth);
+    const extraH = Math.max(0, Math.round(outputHeight) - sourceHeight);
+    const left = Math.floor(extraW / 2);
+    const top = Math.floor(extraH / 2);
+    return { left, right: extraW - left, top, bottom: extraH - top };
+}
+
+export function scaleOutpaintPadding(sourceWidth: number, sourceHeight: number, scale: number): ImageOutpaintPadding {
+    const width = Math.max(sourceWidth, Math.round(sourceWidth * scale));
+    const height = Math.max(sourceHeight, Math.round(sourceHeight * scale));
+    return centerOutpaintPadding(sourceWidth, sourceHeight, width, height);
+}
+
+export function aspectOutpaintPadding(sourceWidth: number, sourceHeight: number, ratioWidth: number, ratioHeight: number): ImageOutpaintPadding {
+    const targetAspect = ratioWidth / Math.max(1, ratioHeight);
+    const sourceAspect = sourceWidth / Math.max(1, sourceHeight);
+    const width = targetAspect >= sourceAspect ? Math.max(sourceWidth, Math.round(sourceHeight * targetAspect)) : sourceWidth;
+    const height = targetAspect >= sourceAspect ? sourceHeight : Math.max(sourceHeight, Math.round(sourceWidth / targetAspect));
+    return centerOutpaintPadding(sourceWidth, sourceHeight, width, height);
+}
+
+export function redistributeOutpaintPadding(sourceWidth: number, sourceHeight: number, padding: ImageOutpaintPadding, outputWidth: number, outputHeight: number): ImageOutpaintPadding {
+    const extraW = Math.max(0, outputWidth - sourceWidth);
+    const extraH = Math.max(0, outputHeight - sourceHeight);
+    const horizontal = Math.max(0, padding.left + padding.right);
+    const vertical = Math.max(0, padding.top + padding.bottom);
+    const left = horizontal > 0 ? Math.round(extraW * (padding.left / horizontal)) : Math.floor(extraW / 2);
+    const top = vertical > 0 ? Math.round(extraH * (padding.top / vertical)) : Math.floor(extraH / 2);
+    return {
+        left: Math.min(extraW, Math.max(0, left)),
+        right: extraW - Math.min(extraW, Math.max(0, left)),
+        top: Math.min(extraH, Math.max(0, top)),
+        bottom: extraH - Math.min(extraH, Math.max(0, top)),
+    };
+}
+
+export function moveOutpaintSource(padding: ImageOutpaintPadding, dx: number, dy: number): ImageOutpaintPadding {
+    const extraW = Math.max(0, padding.left + padding.right);
+    const extraH = Math.max(0, padding.top + padding.bottom);
+    const left = Math.min(extraW, Math.max(0, Math.round(padding.left + dx)));
+    const top = Math.min(extraH, Math.max(0, Math.round(padding.top + dy)));
+    return { left, right: extraW - left, top, bottom: extraH - top };
+}
+
+function fillOutpaintEdgeContext(context: CanvasRenderingContext2D, image: HTMLImageElement, left: number, top: number, right: number, bottom: number) {
+    const sw = image.width;
+    const sh = image.height;
+    if (top > 0) context.drawImage(image, 0, 0, sw, 1, left, 0, sw, top);
+    if (bottom > 0) context.drawImage(image, 0, sh - 1, sw, 1, left, top + sh, sw, bottom);
+    if (left > 0) context.drawImage(image, 0, 0, 1, sh, 0, top, left, sh);
+    if (right > 0) context.drawImage(image, sw - 1, 0, 1, sh, left + sw, top, right, sh);
+    if (top > 0 && left > 0) context.drawImage(image, 0, 0, 1, 1, 0, 0, left, top);
+    if (top > 0 && right > 0) context.drawImage(image, sw - 1, 0, 1, 1, left + sw, 0, right, top);
+    if (bottom > 0 && left > 0) context.drawImage(image, 0, sh - 1, 1, 1, 0, top + sh, left, bottom);
+    if (bottom > 0 && right > 0) context.drawImage(image, sw - 1, sh - 1, 1, 1, left + sw, top + sh, right, bottom);
+    context.drawImage(image, left, top);
+}
+
+export async function composeOutpaintCanvas(dataUrl: string, padding: ImageOutpaintPadding, options?: { contextFill?: "edge" | "empty" }): Promise<ImageOutpaintLayout> {
+    const image = await loadImage(dataUrl);
+    const left = Math.max(0, Math.round(padding.left));
+    const right = Math.max(0, Math.round(padding.right));
+    const top = Math.max(0, Math.round(padding.top));
+    const bottom = Math.max(0, Math.round(padding.bottom));
+    const width = image.width + left + right;
+    const height = image.height + top + bottom;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, width);
+    canvas.height = Math.max(1, height);
+    const context = canvas.getContext("2d");
+    if (!context) {
+        return { imageDataUrl: dataUrl, maskDataUrl: dataUrl, width: image.width, height: image.height, sourceWidth: image.width, sourceHeight: image.height, left: 0, top: 0, right: 0, bottom: 0 };
+    }
+    if (options?.contextFill === "empty") {
+        context.clearRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(image, left, top);
+    } else {
+        fillOutpaintEdgeContext(context, image, left, top, right, bottom);
+    }
+    const box: OutpaintBox = { left, top, right, bottom, sourceWidth: image.width, sourceHeight: image.height };
+    const overlap = options?.contextFill === "empty" ? 0 : outpaintBlendPx(image.width, image.height);
+    const mask = document.createElement("canvas");
+    mask.width = canvas.width;
+    mask.height = canvas.height;
+    const maskContext = mask.getContext("2d");
+    if (maskContext) {
+        maskContext.fillStyle = "#fff";
+        maskContext.fillRect(0, 0, mask.width, mask.height);
+        const pixels = maskContext.getImageData(0, 0, mask.width, mask.height);
+        const data = pixels.data;
+        for (let y = 0; y < mask.height; y++) {
+            for (let x = 0; x < mask.width; x++) {
+                data[(y * mask.width + x) * 4 + 3] = outpaintMaskKeepAlpha(x, y, box, overlap);
+            }
+        }
+        maskContext.putImageData(pixels, 0, 0);
+    }
+    return {
+        imageDataUrl: canvas.toDataURL("image/png"),
+        maskDataUrl: (maskContext ? mask : canvas).toDataURL("image/png"),
+        width: canvas.width,
+        height: canvas.height,
+        sourceWidth: image.width,
+        sourceHeight: image.height,
+        left,
+        top,
+        right,
+        bottom,
+    };
+}
+
+export async function applyOutpaintOriginal(generatedDataUrl: string, originalDataUrl: string, layout: ImageOutpaintLayout) {
+    const generated = await loadImage(generatedDataUrl);
+    const original = await loadImage(originalDataUrl);
+    const canvas = document.createElement("canvas");
+    canvas.width = generated.width;
+    canvas.height = generated.height;
+    const context = canvas.getContext("2d");
+    if (!context) return generatedDataUrl;
+    context.drawImage(generated, 0, 0);
+    const scaleX = generated.width / Math.max(1, layout.width);
+    const scaleY = generated.height / Math.max(1, layout.height);
+    context.drawImage(original, layout.left * scaleX, layout.top * scaleY, layout.sourceWidth * scaleX, layout.sourceHeight * scaleY);
+    return canvas.toDataURL("image/png");
+}
+
 export async function cropDataUrl(dataUrl: string, crop?: ImageCropRect) {
     const image = await loadImage(dataUrl);
     if (crop) {

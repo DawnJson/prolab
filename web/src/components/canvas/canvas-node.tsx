@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ChevronRight, Group, Image as ImageIcon, Music2, RefreshCw, Star, Video } from "lucide-react";
+import { ThinkingOrb } from "thinking-orbs";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes } from "@/lib/image-utils";
@@ -446,7 +447,7 @@ function GroupNodeContent({ node, theme, groupChildCount }: NodeContentRendererP
 function LoadingContent({ theme }: Pick<NodeContentRendererProps, "theme">) {
     return (
         <div className="flex h-full w-full flex-col items-center justify-center gap-3" style={{ color: theme.node.activeStroke }}>
-            <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />
+            <ThinkingOrb state="solving" size={64} theme="auto" speed={0.6} />
             <span className="text-[10px] tracking-[0.2em]">生成中</span>
         </div>
     );
