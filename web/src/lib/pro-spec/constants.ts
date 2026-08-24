@@ -849,7 +849,7 @@ export function normalizeBaseUrl(url: string): string {
  */
 export const DEFAULT_UPSTREAM = {
   name: 'ProAPI',
-  baseUrl: 'https://kiligai.com',
+  baseUrl: 'https://newapi.prorisehub.com',
   signUpUrl: 'https://kiligai.com/sign-up',
 } as const
 

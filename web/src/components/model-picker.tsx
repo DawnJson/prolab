@@ -13,11 +13,12 @@ type ModelPickerProps = {
     capability?: ModelCapability;
     className?: string;
     fullWidth?: boolean;
+    compact?: boolean;
     placeholder?: string;
     onMissingConfig?: () => void;
 };
 
-export function ModelPicker({ config, value, onChange, capability, className, fullWidth = false, placeholder = "选择模型", onMissingConfig }: ModelPickerProps) {
+export function ModelPicker({ config, value, onChange, capability, className, fullWidth = false, compact = false, placeholder = "选择模型", onMissingConfig }: ModelPickerProps) {
     const pickerId = useId();
     const [open, setOpen] = useState(false);
     const options = useMemo(() => Array.from(new Set([...(config.channelMode === "local" && !capability ? [value] : []), ...selectableModelsByCapability(config, capability)].filter((model): model is string => Boolean(model)))), [capability, config, value]);
@@ -55,7 +56,7 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
             >
                 <ModelIcon model={current} />
                 <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{current ? modelOptionName(current) : placeholder}</span>
-                {current ? <span className="hidden max-w-28 shrink-0 truncate text-xs text-muted-foreground sm:inline">{modelOptionSourceLabel(config, current)}</span> : null}
+                {current && !compact ? <span className="hidden max-w-28 shrink-0 truncate text-xs text-muted-foreground sm:inline">{modelOptionSourceLabel(config, current)}</span> : null}
             </SelectTrigger>
             <SelectContent
                 data-canvas-no-zoom

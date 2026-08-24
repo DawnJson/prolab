@@ -141,11 +141,11 @@ export function buildDalleEndpointBody(opts: BuildBodyOpts): Record<string, any>
     case 'gpt-image': {
       // gpt-image-2：
       //   size(auto + WxH，16 倍数 / 0.65M-8.3M 像素), quality(auto|low|medium|high),
-      //   aspect_ratio（ProAPI 中转扩展字段）, background, output_format(png|jpeg|webp),
-      //   output_compression（仅 jpeg/webp）, moderation(auto|low), input_fidelity(low|high)
+      //   background, output_format(png|jpeg|webp), output_compression（仅 jpeg/webp）, moderation(auto|low), input_fidelity(low|high)
+      // 像素级 size 已完整表达比例；仅在没有 size 时保留 ProAPI aspect_ratio 扩展兜底，避免编辑端点重复处理比例后裁剪画面。
       if (p.size) body.size = normalizeSize(p.size)
       if (p.quality) body.quality = p.quality
-      if (p.aspectRatio) body.aspect_ratio = p.aspectRatio
+      if (!p.size && p.aspectRatio) body.aspect_ratio = p.aspectRatio
       if (p.background && p.background !== 'auto') body.background = p.background
       if (p.outputFormat) body.output_format = p.outputFormat
       if (
@@ -183,17 +183,10 @@ export function buildDalleEndpointBody(opts: BuildBodyOpts): Record<string, any>
     }
 
     case 'nano-banana': {
-      // Nano Banana（Gemini 2.5/3 Flash Image）：
-      //   aspect_ratio + imageSize（仅 1K/2K/4K）由 ProAPI 中转层转 imageConfig
-      // 不支持：quality / seed / negative_prompt / 任意 WxH 像素 size
-      if (p.aspectRatio) body.aspect_ratio = p.aspectRatio
-      if (p.size) {
-        const s = normalizeSize(p.size)
-        if (isKLevelSize(s)) {
-          body.size = s
-        }
-        // 用户若选了 WxH 档位（不该出现，但兜底过滤）则不发，避免上游报错
-      }
+      // Nano Banana（Gemini Flash Image，经 New-API OpenAI 兼容透传）：
+      // 实测上游只认 OpenAI 标准像素级 size（WxH，精确遵循，支持到 4K/超大），
+      // 不认比例字符串 / aspect_ratio / image_size / quality。故仅透传像素 size。
+      if (p.size) body.size = normalizeSize(p.size)
       break
     }
 

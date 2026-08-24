@@ -1312,6 +1312,41 @@ function InfiniteCanvasPage() {
         setDialogNodeId(id);
     }, []);
 
+    const createImageFileNodes = useCallback(async (files: File[], position: Position) => {
+        const images = await Promise.all(files.map(async (file) => ({ file, image: await uploadImage(file) })));
+        const sizes = images.map(({ image }) => fitNodeSize(image.width, image.height));
+        const columns = Math.max(1, Math.round(Math.sqrt(images.length)));
+        const rows = Math.ceil(images.length / columns);
+        const gap = 36;
+        const cellWidth = Math.max(...sizes.map((size) => size.width));
+        const cellHeight = Math.max(...sizes.map((size) => size.height));
+        const startX = position.x - (columns * cellWidth + (columns - 1) * gap) / 2;
+        const startY = position.y - (rows * cellHeight + (rows - 1) * gap) / 2;
+        const timestamp = Date.now();
+        const newNodes = images.map(({ file, image }, index): CanvasNodeData => {
+            const size = sizes[index];
+            const column = index % columns;
+            const row = Math.floor(index / columns);
+            return {
+                id: `image-${timestamp}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+                type: CanvasNodeType.Image,
+                title: file.name,
+                position: {
+                    x: startX + column * (cellWidth + gap) + (cellWidth - size.width) / 2,
+                    y: startY + row * (cellHeight + gap) + (cellHeight - size.height) / 2,
+                },
+                width: size.width,
+                height: size.height,
+                metadata: imageMetadata(image),
+            };
+        });
+
+        setNodes((prev) => [...prev, ...newNodes]);
+        setSelectedNodeIds(new Set(newNodes.map((node) => node.id)));
+        setSelectedConnectionId(null);
+        setDialogNodeId(null);
+    }, []);
+
     const createVideoFileNode = useCallback(async (file: File, position: Position) => {
         const video = await uploadMediaFile(file, "video");
         const size = fitNodeSize(video.width || 1280, video.height || 720, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
@@ -1937,13 +1972,19 @@ function InfiniteCanvasPage() {
     const handleDrop = useCallback(
         (event: ReactDragEvent<HTMLDivElement>) => {
             event.preventDefault();
-            const file = Array.from(event.dataTransfer.files).find((item) => item.type.startsWith("image/") || item.type.startsWith("video/") || isAudioFile(item));
-            if (!file) return;
-
+            const files = Array.from(event.dataTransfer.files);
+            const imageFiles = files.filter((item) => item.type.startsWith("image/"));
             const pos = screenToCanvas(event.clientX, event.clientY);
+            if (imageFiles.length > 1) {
+                void createImageFileNodes(imageFiles, pos);
+                return;
+            }
+
+            const file = files.find((item) => item.type.startsWith("image/") || item.type.startsWith("video/") || isAudioFile(item));
+            if (!file) return;
             void (isAudioFile(file) ? createAudioFileNode(file, pos) : file.type.startsWith("video/") ? createVideoFileNode(file, pos) : createImageFileNode(file, pos));
         },
-        [createAudioFileNode, createImageFileNode, createVideoFileNode, screenToCanvas],
+        [createAudioFileNode, createImageFileNode, createImageFileNodes, createVideoFileNode, screenToCanvas],
     );
 
     const pasteAssistantImage = useCallback(
@@ -3252,6 +3293,7 @@ function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefine
         ...config,
         model: node?.metadata?.model || defaultModel || (mode === "audio" ? defaultConfig.audioModel : config.model || defaultConfig.model),
         quality: node?.metadata?.quality || config.quality || defaultConfig.quality,
+        resolution: node?.metadata?.resolution || config.resolution || defaultConfig.resolution,
         size: node?.metadata?.size || config.size || defaultConfig.size,
         videoSeconds: node?.metadata?.seconds || config.videoSeconds || defaultConfig.videoSeconds,
         vquality: node?.metadata?.vquality || config.vquality || defaultConfig.vquality,

@@ -7,6 +7,7 @@ import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
 import { imageToDataUrl } from "@/services/image-storage";
 import { inferModelInfo } from "@/lib/pro-spec/model-inference";
 import { buildRequest } from "@/lib/pro-spec/provider-adapter";
+import { detectModelFamily } from "@/lib/pro-spec/image-body-builder";
 import type { ImageModelParams } from "@/lib/pro-spec/types";
 import type { ReferenceImage } from "@/types/image";
 
@@ -95,18 +96,9 @@ type GeminiPayload = {
 type GeminiStreamState = { buffer: string; text: string; toolCalls: ResponseToolCall[]; error?: string };
 type RequestOptions = { signal?: AbortSignal };
 
-const QUALITY_BASE: Record<string, number> = {
-    low: 1024,
-    medium: 2048,
-    high: 2880,
-    standard: 1024,
-    hd: 2048,
-};
-const QUALITY_ALIASES: Record<string, string> = {
-    "1k": "low",
-    "2k": "medium",
-    "4k": "high",
-};
+const RESOLUTION_BASE: Record<string, number> = { "1k": 1024, "2k": 2048, "4k": 2880 };
+// Nano Banana 上游按像素级 size 精确出图，可支持真 4K，故单独放宽分辨率基数与尺寸上限。
+const NANO_BANANA_RESOLUTION_BASE: Record<string, number> = { "1k": 1024, "2k": 2048, "4k": 4096 };
 const DEFAULT_IMAGE_SHORT_SIDE = 1024;
 const IMAGE_SIZE_STEP = 16;
 const IMAGE_MIN_PIXELS = 655360;
@@ -115,19 +107,32 @@ const IMAGE_MAX_EDGE = 3840;
 const IMAGE_MAX_RATIO = 3;
 const IMAGE_OUTPUT_FORMAT = "png";
 
-const GEMINI_SUPPORTED_RATIOS = ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"];
-const GEMINI_IMAGE_SIZE_BY_QUALITY: Record<string, string> = { low: "1K", medium: "2K", high: "4K", standard: "1K", hd: "2K" };
+type SizeLimits = { maxEdge: number; maxPixels: number; minPixels: number };
+const DEFAULT_SIZE_LIMITS: SizeLimits = { maxEdge: IMAGE_MAX_EDGE, maxPixels: IMAGE_MAX_PIXELS, minPixels: IMAGE_MIN_PIXELS };
+// Nano Banana 实测可精确出图到 6000×4000 级，放宽最长边与像素上限以支持真 4K。
+const NANO_BANANA_SIZE_LIMITS: SizeLimits = { maxEdge: 5504, maxPixels: 24000000, minPixels: IMAGE_MIN_PIXELS };
 
-function normalizeQuality(quality: string) {
-    const value = quality.trim().toLowerCase();
-    const normalized = QUALITY_ALIASES[value] || value;
-    return QUALITY_BASE[normalized] ? normalized : undefined;
+const GEMINI_SUPPORTED_RATIOS = ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"];
+const GEMINI_IMAGE_SIZE_BY_RESOLUTION: Record<string, string> = { "1k": "1K", "2k": "2K", "4k": "4K" };
+
+export function normalizeResolution(resolution: string) {
+    const value = (resolution || "").trim().toLowerCase();
+    return value === "1k" || value === "2k" || value === "4k" ? value : undefined;
 }
 
-/** Map "quality + ratio" to an explicit pixel dimension like "3840x2160". */
-function resolveSize(quality: string | undefined, ratio: string): string {
+export function resolutionBasePixels(resolution: string) {
+    const key = normalizeResolution(resolution);
+    return key ? RESOLUTION_BASE[key] : undefined;
+}
+
+function normalizeGptQuality(quality: string) {
+    const value = (quality || "").trim().toLowerCase();
+    return value === "low" || value === "medium" || value === "high" || value === "hd" || value === "standard" ? value : undefined;
+}
+
+/** Map "resolution base + ratio" to an explicit pixel dimension like "3840x2160". */
+function resolveSize(basePixels: number | undefined, ratio: string, limits: SizeLimits = DEFAULT_SIZE_LIMITS): string {
     const parsedRatio = parseImageRatio(ratio);
-    const basePixels = quality ? QUALITY_BASE[quality] : undefined;
     const isLandscape = parsedRatio.width >= parsedRatio.height;
     const longRatio = isLandscape ? parsedRatio.width / parsedRatio.height : parsedRatio.height / parsedRatio.width;
     let longSide: number;
@@ -136,7 +141,7 @@ function resolveSize(quality: string | undefined, ratio: string): string {
     if (basePixels) {
         const targetPixels = basePixels * basePixels;
         const longSideRaw = Math.sqrt(targetPixels * longRatio);
-        longSide = Math.floor(longSideRaw / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
+        longSide = Math.min(limits.maxEdge, Math.floor(longSideRaw / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP);
         shortSide = Math.round(longSide / longRatio / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
     } else {
         shortSide = DEFAULT_IMAGE_SHORT_SIDE;
@@ -145,7 +150,7 @@ function resolveSize(quality: string | undefined, ratio: string): string {
 
     const width = isLandscape ? longSide : shortSide;
     const height = isLandscape ? shortSide : longSide;
-    validateImageSize(width, height);
+    validateImageSize(width, height, limits);
     return `${width}x${height}`;
 }
 
@@ -165,36 +170,79 @@ function parseImageDimensions(value: string) {
     return { width: Number(match[1]), height: Number(match[2]) };
 }
 
-function validateImageSize(width: number, height: number) {
+function validateImageSize(width: number, height: number, limits: SizeLimits = DEFAULT_SIZE_LIMITS) {
     if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) throw new Error("图像尺寸必须是正整数，例如 1024x1024");
     if (width % IMAGE_SIZE_STEP !== 0 || height % IMAGE_SIZE_STEP !== 0) throw new Error("图像尺寸的宽高必须是 16 的倍数，请调整尺寸");
-    if (Math.max(width, height) > IMAGE_MAX_EDGE) throw new Error("图像尺寸最长边不能超过 3840px，请调整尺寸");
+    if (Math.max(width, height) > limits.maxEdge) throw new Error(`图像尺寸最长边不能超过 ${limits.maxEdge}px，请调整尺寸`);
     if (Math.max(width, height) / Math.min(width, height) > IMAGE_MAX_RATIO) throw new Error("图像宽高比不能超过 3:1，请调整尺寸");
     const pixels = width * height;
-    if (pixels < IMAGE_MIN_PIXELS || pixels > IMAGE_MAX_PIXELS) throw new Error("图像总像素需在 655360 到 8294400 之间，请调整尺寸");
+    if (pixels < limits.minPixels || pixels > limits.maxPixels) throw new Error(`图像总像素需在 ${limits.minPixels} 到 ${limits.maxPixels} 之间，请调整尺寸`);
 }
 
-function resolveRequestSize(quality: string | undefined, size: string) {
+export function resolveRequestSize(basePixels: number | undefined, size: string, limits: SizeLimits = DEFAULT_SIZE_LIMITS) {
     const value = size.trim();
     if (!value || value.toLowerCase() === "auto") return undefined;
     const dimensions = parseImageDimensions(value);
     if (dimensions) {
-        validateImageSize(dimensions.width, dimensions.height);
+        validateImageSize(dimensions.width, dimensions.height, limits);
         return `${dimensions.width}x${dimensions.height}`;
     }
-    if (value.includes(":")) return resolveSize(quality, value);
+    if (value.includes(":")) return resolveSize(basePixels, value, limits);
     throw new Error("图像尺寸格式不支持，请使用 auto、9:16 或 1024x1024");
+}
+
+/** 按模型选择合适的分辨率基数与尺寸上限，解析出像素级尺寸。Nano Banana 用放宽上限（支持真 4K）。 */
+export function resolveModelRequestSize(model: string, resolution: string, size: string) {
+    const nanoBanana = detectModelFamily(model) === "nano-banana";
+    const key = normalizeResolution(resolution) || "1k";
+    const basePixels = nanoBanana ? NANO_BANANA_RESOLUTION_BASE[key] : resolutionBasePixels(resolution);
+    const limits = nanoBanana ? NANO_BANANA_SIZE_LIMITS : DEFAULT_SIZE_LIMITS;
+    return resolveRequestSize(basePixels, size, limits);
+}
+
+/** 将任意宽高投影到可生成的有效尺寸(16 倍数、比例 ≤3:1、最长边与像素落在 limits 内)。clamped 标记输入是否超出范围/比例限制(纯 16 对齐不算)。 */
+export function clampImageSize(width: number, height: number, limits: SizeLimits = DEFAULT_SIZE_LIMITS): { width: number; height: number; clamped: boolean } {
+    const { maxEdge, maxPixels, minPixels } = limits;
+    let w = Math.max(1, Math.floor(Number(width) || 0));
+    let h = Math.max(1, Math.floor(Number(height) || 0));
+    const clamped = Math.max(w, h) > maxEdge || Math.max(w, h) > Math.min(w, h) * IMAGE_MAX_RATIO || w * h < minPixels || w * h > maxPixels;
+    // 1. 收紧宽高比:压低更长的一边到 3:1 以内
+    if (w > h * IMAGE_MAX_RATIO) w = h * IMAGE_MAX_RATIO;
+    else if (h > w * IMAGE_MAX_RATIO) h = w * IMAGE_MAX_RATIO;
+    // 2. 等比缩放,落入最长边与像素上下限(比例 ≤3 时该区间必非空)
+    const scale = Math.min(maxEdge / Math.max(w, h), Math.sqrt(maxPixels / (w * h)), Math.max(1, Math.sqrt(minPixels / (w * h))));
+    w = Math.round((w * scale) / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
+    h = Math.round((h * scale) / IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP;
+    // 3. 修正取整漂移:按优先级单步调整,单调收敛到有效尺寸
+    for (let i = 0; i < 64; i++) {
+        w = Math.max(IMAGE_SIZE_STEP, w);
+        h = Math.max(IMAGE_SIZE_STEP, h);
+        if (Math.max(w, h) > maxEdge) w >= h ? (w -= IMAGE_SIZE_STEP) : (h -= IMAGE_SIZE_STEP);
+        else if (Math.max(w, h) > Math.min(w, h) * IMAGE_MAX_RATIO) w <= h ? (w += IMAGE_SIZE_STEP) : (h += IMAGE_SIZE_STEP);
+        else if (w * h > maxPixels) w >= h ? (w -= IMAGE_SIZE_STEP) : (h -= IMAGE_SIZE_STEP);
+        else if (w * h < minPixels) w <= h ? (w += IMAGE_SIZE_STEP) : (h += IMAGE_SIZE_STEP);
+        else break;
+    }
+    return { width: w, height: h, clamped };
+}
+
+/** 按模型选择尺寸上限的 clamp（Nano Banana 放宽到真 4K）。 */
+export function clampImageSizeForModel(model: string, width: number, height: number) {
+    const limits = detectModelFamily(model) === "nano-banana" ? NANO_BANANA_SIZE_LIMITS : DEFAULT_SIZE_LIMITS;
+    return clampImageSize(width, height, limits);
 }
 
 function imageModelParamsFromConfig(config: AiConfig, count: number): ImageModelParams {
     const size = (config.size || "").trim();
-    const quality = (config.quality || "").trim();
-    const grokImagine = /grok-imagine/i.test(config.model || config.imageModel);
-    const normalizedQuality = normalizeImageModelParamQuality(grokImagine ? (quality === "low" ? "1k" : "2k") : quality);
+    const resolution = normalizeResolution(config.resolution);
+    const model = config.model || config.imageModel;
+    const grokImagine = /grok-imagine/i.test(model);
+    const normalizedQuality = normalizeImageModelParamQuality(grokImagine ? (resolution === "1k" ? "1k" : "2k") : (config.quality || "").trim());
+    const requestSize = size && size !== "auto" ? resolveModelRequestSize(model, config.resolution, size) : undefined;
     return {
         sampleCount: count,
         ...(size && size !== "auto" && size.includes(":") ? { aspectRatio: size } : {}),
-        ...(size && size !== "auto" && !size.includes(":") ? { size } : {}),
+        ...(requestSize ? { size: requestSize } : {}),
         ...(normalizedQuality ? { quality: normalizedQuality } : {}),
     };
 }
@@ -209,7 +257,7 @@ function resolveGeminiImageConfig(config: AiConfig) {
     const dimensions = parseImageDimensions(value);
     const ratio = dimensions ? `${dimensions.width}:${dimensions.height}` : value;
     const aspectRatio = value && value.toLowerCase() !== "auto" ? closestGeminiAspectRatio(ratio) : undefined;
-    const imageSize = supportsGeminiImageSize(config.model) ? resolveGeminiImageSize(config.quality, dimensions) : undefined;
+    const imageSize = supportsGeminiImageSize(config.model) ? resolveGeminiImageSize(config.resolution, dimensions) : undefined;
     const image = { ...(aspectRatio ? { aspectRatio } : {}), ...(imageSize ? { imageSize } : {}) };
     return Object.keys(image).length ? { responseFormat: { image } } : {};
 }
@@ -224,15 +272,16 @@ function closestGeminiAspectRatio(value: string) {
     });
 }
 
-function resolveGeminiImageSize(quality: string, dimensions: { width: number; height: number } | null) {
-    const normalizedQuality = normalizeQuality(quality);
-    if (normalizedQuality) return GEMINI_IMAGE_SIZE_BY_QUALITY[normalizedQuality];
-    if (!dimensions) return undefined;
-    const edge = Math.max(dimensions.width, dimensions.height);
-    if (edge <= 768) return "512";
-    if (edge <= 1536) return "1K";
-    if (edge <= 3072) return "2K";
-    return "4K";
+function resolveGeminiImageSize(resolution: string, dimensions: { width: number; height: number } | null) {
+    if (dimensions) {
+        const edge = Math.max(dimensions.width, dimensions.height);
+        if (edge <= 768) return "512";
+        if (edge <= 1536) return "1K";
+        if (edge <= 3072) return "2K";
+        return "4K";
+    }
+    const key = normalizeResolution(resolution);
+    return key ? GEMINI_IMAGE_SIZE_BY_RESOLUTION[key] : undefined;
 }
 
 function supportsGeminiImageSize(model: string) {
@@ -698,8 +747,8 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
             throw new Error(readAxiosError(error, "请求失败"));
         }
     }
-    const quality = normalizeQuality(config.quality);
-    const requestSize = resolveRequestSize(quality, config.size);
+    const quality = normalizeGptQuality(config.quality);
+    const requestSize = resolveRequestSize(resolutionBasePixels(config.resolution), config.size);
     try {
         const response = await axios.post<ImageApiResponse>(
             aiApiUrl(requestConfig, "/images/generations"),
@@ -777,8 +826,8 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
             throw new Error(readAxiosError(error, "请求失败"));
         }
     }
-    const quality = normalizeQuality(config.quality);
-    const requestSize = resolveRequestSize(quality, config.size);
+    const quality = normalizeGptQuality(config.quality);
+    const requestSize = resolveRequestSize(resolutionBasePixels(config.resolution), config.size);
     const formData = new FormData();
     formData.set("model", requestConfig.model);
     formData.set("prompt", withSystemPrompt(requestConfig, requestPrompt));

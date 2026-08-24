@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, LoaderCircle, Music2, Plus, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, Music2, Plus, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { App, Button, Checkbox, Drawer, Empty, Input, Modal, Tag, Typography } from "antd";
 import localforage from "localforage";
@@ -20,6 +20,7 @@ import { modelOptionName, modelOptionSourceLabel, useConfigStore, useEffectiveCo
 import { useThemeStore } from "@/stores/use-theme-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
+import { ThinkingOrb } from "thinking-orbs";
 
 type GeneratedVideo = {
     id: string;
@@ -474,8 +475,8 @@ export default function VideoPage() {
                         </div>
 
                         <div className="mt-auto pt-6">
-                            <Button type="primary" size="large" block icon={<Sparkles className="size-4" />} loading={running} disabled={!canGenerate || running} onClick={() => void generate()}>
-                                开始生成
+                            <Button type="primary" size="large" block icon={<Sparkles className="size-4" />} loading={running ? { icon: <ThinkingOrb state="solving" size={20} theme="dark" speed={0.6} /> } : false} disabled={!canGenerate || running} onClick={() => void generate()}>
+                                {running ? "生成中..." : "开始生成"}
                             </Button>
                         </div>
                     </div>
@@ -571,7 +572,7 @@ function PendingVideoCard() {
     return (
         <div className="relative aspect-video overflow-hidden rounded-lg border border-dashed border-stone-300 bg-stone-50 dark:border-stone-700 dark:bg-stone-900">
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-stone-500 dark:text-stone-400">
-                <LoaderCircle className="size-6 animate-spin" />
+                <ThinkingOrb state="solving" size={64} theme="auto" speed={0.6} />
                 <span>生成中</span>
             </div>
         </div>

@@ -1,14 +1,20 @@
-import { type ReactNode, useState } from "react";
-import { ConfigProvider, Switch } from "antd";
+import { type ReactNode, type RefObject, useRef, useState } from "react";
+import { App, ConfigProvider, InputNumber, Switch } from "antd";
 
 import { type CanvasTheme } from "@/lib/canvas-theme";
-import type { AiConfig } from "@/stores/use-config-store";
+import { modelOptionName, type AiConfig } from "@/stores/use-config-store";
+import { clampImageSizeForModel, resolveModelRequestSize } from "@/services/api/image";
 
 const qualityOptions = [
     { value: "auto", label: "自动" },
-    { value: "high", label: "高" },
-    { value: "medium", label: "中" },
     { value: "low", label: "低" },
+    { value: "medium", label: "中" },
+    { value: "high", label: "高" },
+];
+const resolutionOptions = [
+    { value: "1k", label: "1K" },
+    { value: "2k", label: "2K" },
+    { value: "4k", label: "4K" },
 ];
 const DIMENSION_STEP = 16;
 
@@ -20,40 +26,62 @@ const aspectOptions = [
     { value: "3:4", label: "3:4", width: 1024, height: 1360, icon: "portrait" },
     { value: "16:9", label: "16:9", width: 1824, height: 1024, icon: "landscape" },
     { value: "9:16", label: "9:16", width: 1024, height: 1824, icon: "portrait" },
-    { value: "1:1-2k", label: "1:1(2k)", size: "2048x2048", width: 2048, height: 2048, icon: "square" },
-    { value: "16:9-2k", label: "16:9(2k)", size: "2048x1152", width: 2048, height: 1152, icon: "landscape" },
-    { value: "9:16-2k", label: "9:16(2k)", size: "1152x2048", width: 1152, height: 2048, icon: "portrait" },
-    { value: "16:9-4k", label: "16:9(4k)", size: "3840x2160", width: 3840, height: 2160, icon: "landscape" },
-    { value: "9:16-4k", label: "9:16(4k)", size: "2160x3840", width: 2160, height: 3840, icon: "portrait" },
+    { value: "21:9", label: "21:9", width: 1552, height: 672, icon: "landscape" },
+    { value: "9:21", label: "9:21", width: 672, height: 1552, icon: "portrait" },
     { value: "auto", label: "auto", width: 0, height: 0, icon: "auto" },
 ];
 
+type SettingSection = "quality" | "resolution" | "size" | "aspect" | "count";
+
+const ALL_SECTIONS: SettingSection[] = ["quality", "resolution", "size", "aspect", "count"];
+
 type ImageSettingsPanelProps = {
     config: AiConfig;
-    onConfigChange: (key: "quality" | "size" | "count", value: string) => void;
+    onConfigChange: (key: "quality" | "resolution" | "size" | "count", value: string) => void;
     theme: CanvasTheme;
     showTitle?: boolean;
     className?: string;
     maxCount?: number;
-    quickCount?: number;
+    sections?: SettingSection[];
+    qualityDisabled?: boolean;
 };
 
-export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5", maxCount = 15, quickCount = 10 }: ImageSettingsPanelProps) {
+export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5", maxCount = 15, sections = ALL_SECTIONS, qualityDisabled = false }: ImageSettingsPanelProps) {
     const [snapDimensionToStep, setSnapDimensionToStep] = useState(true);
+    const { message } = App.useApp();
+    const widthRef = useRef<HTMLInputElement>(null);
+    const heightRef = useRef<HTMLInputElement>(null);
+    const show = (name: SettingSection) => sections.includes(name);
     const quality = config.quality || "auto";
+    const resolution = config.resolution || "1k";
     const count = Math.max(1, Math.min(maxCount, Math.floor(Math.abs(Number(config.count)) || 1)));
     const activeSize = config.size || "auto";
-    const selectedAspect = aspectOptions.find((item) => (item.size || item.value) === activeSize || item.value === activeSize);
-    const dimensions = readSizeDimensions(activeSize, selectedAspect || aspectOptions[0]);
+    const model = modelOptionName(config.model || config.imageModel || "");
+    const customDimensions = activeSize.match(/^(\d+)x(\d+)$/);
+    const customRatio = customDimensions ? reduceRatio(Number(customDimensions[1]), Number(customDimensions[2])) : "";
+    const activeRatio = activeSize.includes(":") ? activeSize : customRatio || "auto";
+    const selectedAspect = aspectOptions.find((item) => item.value === activeRatio);
+    const dimensions = readSizeDimensions(model, activeSize, resolution, selectedAspect || aspectOptions[0]);
+    const isCustomSize = Boolean(customDimensions);
     const selectAspect = (value: string) => {
-        const option = aspectOptions.find((item) => item.value === value);
-        onConfigChange("size", option?.size || option?.value || "auto");
+        onConfigChange("size", value);
     };
-    const updateDimension = (key: "width" | "height", value: number | null) => {
-        const next = Math.max(1, Math.floor(value || dimensions[key] || 1024));
-        const width = key === "width" ? next : dimensions.width;
-        const height = key === "height" ? next : dimensions.height;
-        onConfigChange("size", `${alignDimension(width, snapDimensionToStep)}x${alignDimension(height, snapDimensionToStep)}`);
+    const selectResolution = (value: string) => {
+        if (isCustomSize) onConfigChange("size", reduceRatio(dimensions.width, dimensions.height));
+        onConfigChange("resolution", value);
+    };
+    const enterCustomSize = () => {
+        if (isCustomSize) return;
+        onConfigChange("size", `${dimensions.width || 1024}x${dimensions.height || 1024}`);
+    };
+    const commitDimensions = () => {
+        const rawWidth = Number(widthRef.current?.value) || dimensions.width || 1024;
+        const rawHeight = Number(heightRef.current?.value) || dimensions.height || 1024;
+        const size = clampImageSizeForModel(model, rawWidth, rawHeight);
+        if (widthRef.current) widthRef.current.value = String(size.width);
+        if (heightRef.current) heightRef.current.value = String(size.height);
+        if (size.clamped) message.info(`尺寸超出可用范围，已自动调整为 ${size.width}×${size.height}`);
+        onConfigChange("size", `${size.width}x${size.height}`);
     };
 
     return (
@@ -68,16 +96,34 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                 }}
             >
                 {showTitle ? <div className="text-lg font-semibold">图像设置</div> : null}
+                {show("quality") ? (
                 <div className="space-y-2.5">
-                    <SettingTitle color={theme.node.muted}>质量</SettingTitle>
+                    <SettingTitle color={theme.node.muted}>{qualityDisabled ? "质量（当前模型不支持）" : "质量"}</SettingTitle>
                     <div className="grid grid-cols-4 gap-2.5">
                         {qualityOptions.map((item) => (
-                            <OptionPill key={item.value} selected={quality === item.value} theme={theme} onClick={() => onConfigChange("quality", item.value)}>
+                            <OptionPill key={item.value} selected={!qualityDisabled && quality === item.value} disabled={qualityDisabled} theme={theme} onClick={() => onConfigChange("quality", item.value)}>
                                 {item.label}
                             </OptionPill>
                         ))}
                     </div>
                 </div>
+                ) : null}
+                {show("resolution") ? (
+                <div className="space-y-2.5">
+                    <SettingTitle color={theme.node.muted}>分辨率</SettingTitle>
+                    <div className="grid grid-cols-4 gap-2.5">
+                        <OptionPill selected={isCustomSize} theme={theme} onClick={enterCustomSize}>
+                            自定义
+                        </OptionPill>
+                        {resolutionOptions.map((item) => (
+                            <OptionPill key={item.value} selected={!isCustomSize && resolution === item.value} theme={theme} onClick={() => selectResolution(item.value)}>
+                                {item.label}
+                            </OptionPill>
+                        ))}
+                    </div>
+                </div>
+                ) : null}
+                {show("size") ? (
                 <div className="space-y-2.5">
                     <div className="flex items-center justify-between gap-3">
                         <SettingTitle color={theme.node.muted}>尺寸</SettingTitle>
@@ -91,11 +137,13 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                         </div>
                     </div>
                     <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2.5">
-                        <DimensionInput prefix="W" value={dimensions.width} disabled={activeSize === "auto"} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("width", value)} />
+                        <DimensionInput ref={widthRef} prefix="W" value={dimensions.width} disabled={activeSize === "auto"} theme={theme} alignToStep={snapDimensionToStep} onCommit={commitDimensions} />
                         <span className="text-lg opacity-45">↔</span>
-                        <DimensionInput prefix="H" value={dimensions.height} disabled={activeSize === "auto"} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("height", value)} />
+                        <DimensionInput ref={heightRef} prefix="H" value={dimensions.height} disabled={activeSize === "auto"} theme={theme} alignToStep={snapDimensionToStep} onCommit={commitDimensions} />
                     </div>
                 </div>
+                ) : null}
+                {show("aspect") ? (
                 <div className="space-y-2.5">
                     <SettingTitle color={theme.node.muted}>宽高比</SettingTitle>
                     <div className="grid grid-cols-4 gap-2.5">
@@ -114,10 +162,12 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                         ))}
                     </div>
                 </div>
+                ) : null}
+                {show("count") ? (
                 <div className="space-y-2.5">
                     <SettingTitle color={theme.node.muted}>生成张数</SettingTitle>
                     <div className="grid grid-cols-4 gap-2.5">
-                        {Array.from({ length: quickCount }, (_, index) => index + 1).map((value) => (
+                        {[1, 2, 3].map((value) => (
                             <OptionPill key={value} selected={count === value} theme={theme} onClick={() => onConfigChange("count", String(value))}>
                                 {value} 张
                             </OptionPill>
@@ -125,6 +175,7 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                         <CountInput value={count} max={maxCount} theme={theme} onChange={(value) => onConfigChange("count", String(value || 1))} />
                     </div>
                 </div>
+                ) : null}
             </div>
         </ImageSettingsTheme>
     );
@@ -148,28 +199,31 @@ export function imageQualityLabel(value: string) {
 }
 
 export function imageSizeLabel(size: string) {
-    return aspectOptions.find((item) => (item.size || item.value) === size || item.value === size)?.label || size;
+    const custom = size.match(/^(\d+)x(\d+)$/);
+    if (custom) return `${custom[1]}×${custom[2]}`;
+    return aspectOptions.find((item) => item.value === size)?.label || size;
 }
 
-function OptionPill({ selected, theme, onClick, children }: { selected: boolean; theme: CanvasTheme; onClick: () => void; children: ReactNode }) {
+function OptionPill({ selected, theme, onClick, children, disabled = false }: { selected: boolean; theme: CanvasTheme; onClick: () => void; children: ReactNode; disabled?: boolean }) {
     return (
         <button
             type="button"
-            className="h-9 cursor-pointer rounded-full border px-2 text-sm transition hover:opacity-80"
-            style={{ background: "transparent", borderColor: selected ? theme.node.text : theme.node.stroke, color: theme.node.text }}
+            disabled={disabled}
+            className={`h-9 rounded-full border px-2 text-sm transition ${disabled ? "cursor-not-allowed" : "cursor-pointer hover:opacity-80"}`}
+            style={{ background: "transparent", borderColor: selected ? theme.node.text : theme.node.stroke, color: theme.node.text, opacity: disabled ? 0.4 : 1 }}
             onMouseDown={(event) => event.stopPropagation()}
-            onClick={onClick}
+            onClick={disabled ? undefined : onClick}
         >
             {children}
         </button>
     );
 }
 
-function DimensionInput({ prefix, value, disabled, theme, alignToStep, onChange }: { prefix: string; value: number; disabled: boolean; theme: CanvasTheme; alignToStep: boolean; onChange: (value: number | null) => void }) {
+function DimensionInput({ ref, prefix, value, disabled, theme, alignToStep, onCommit }: { ref: RefObject<HTMLInputElement | null>; prefix: string; value: number; disabled: boolean; theme: CanvasTheme; alignToStep: boolean; onCommit: () => void }) {
     const commit = (input: HTMLInputElement) => {
         const next = alignDimension(Math.max(1, Math.floor(Number(input.value) || value || 1024)), alignToStep);
         input.value = String(next);
-        onChange(next);
+        onCommit();
     };
 
     return (
@@ -178,6 +232,7 @@ function DimensionInput({ prefix, value, disabled, theme, alignToStep, onChange 
                 {prefix}
             </span>
             <input
+                ref={ref}
                 type="number"
                 min={1}
                 disabled={disabled}
@@ -196,18 +251,17 @@ function DimensionInput({ prefix, value, disabled, theme, alignToStep, onChange 
 
 function CountInput({ value, max, theme, onChange }: { value: number; max: number; theme: CanvasTheme; onChange: (value: number | null) => void }) {
     return (
-        <label className="col-span-2 flex h-9 overflow-hidden rounded-full border text-sm" style={{ borderColor: theme.node.stroke, color: theme.node.text }}>
-            <input
-                type="number"
+        <div className="min-w-0" onMouseDown={(event) => event.stopPropagation()} style={{ color: theme.node.text }}>
+            <InputNumber
+                className="h-9 !w-full !min-w-0 [&_.ant-input-number-input]:h-full [&_.ant-input-number-input]:!text-center [&_.ant-input-number-input]:!text-inherit"
                 min={1}
                 max={max}
-                className="min-w-0 flex-1 bg-transparent px-3 text-center outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                style={{ color: theme.node.text, WebkitTextFillColor: theme.node.text }}
-                value={value || ""}
-                onChange={(event) => onChange(Number(event.target.value) || null)}
-                onMouseDown={(event) => event.stopPropagation()}
+                value={value}
+                controls
+                onChange={(next) => onChange(typeof next === "number" ? next : null)}
+                style={{ background: "transparent", borderColor: theme.node.stroke, color: theme.node.text }}
             />
-        </label>
+        </div>
     );
 }
 
@@ -231,12 +285,23 @@ function SettingTitle({ children, color }: { children: string; color: string }) 
     );
 }
 
-function readSizeDimensions(size: string, fallback: { width: number; height: number }) {
-    const match = size?.match(/^(\d+)x(\d+)$/);
-    return {
-        width: match ? Number(match[1]) : fallback.width,
-        height: match ? Number(match[2]) : fallback.height,
-    };
+function readSizeDimensions(model: string, size: string, resolution: string, fallback: { width: number; height: number }) {
+    if (size && size !== "auto") {
+        try {
+            const resolved = resolveModelRequestSize(model, resolution, size);
+            const match = resolved?.match(/^(\d+)x(\d+)$/);
+            if (match) return { width: Number(match[1]), height: Number(match[2]) };
+        } catch {
+            // 超出像素/比例约束时回退到宽高比档位的预设尺寸
+        }
+    }
+    return { width: fallback.width, height: fallback.height };
+}
+
+function reduceRatio(width: number, height: number) {
+    const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a);
+    const divisor = gcd(width, height) || 1;
+    return `${width / divisor}:${height / divisor}`;
 }
 
 function alignDimension(value: number, enabled: boolean) {

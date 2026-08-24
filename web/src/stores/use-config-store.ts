@@ -43,6 +43,7 @@ export type AiConfig = {
     textModels: string[];
     audioModels: string[];
     quality: string;
+    resolution: string;
     size: string;
     count: string;
     canvasImageCount: string;
@@ -60,7 +61,7 @@ export type ConfigTabKey = "channels" | "models" | "preferences" | "webdav" | "c
 export const CONFIG_STORE_KEY = "prolab:ai_config_store";
 export type ModelCapability = "image" | "video" | "text" | "audio";
 const CHANNEL_MODEL_SEPARATOR = "::";
-const OPENAI_BASE_URL = "https://kiligai.com";
+const OPENAI_BASE_URL = "https://newapi.prorisehub.com";
 const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 
 export const defaultConfig: AiConfig = {
@@ -98,6 +99,7 @@ export const defaultConfig: AiConfig = {
     textModels: ["default::gpt-5.5"],
     audioModels: ["default::gpt-4o-mini-tts"],
     quality: "auto",
+    resolution: "1k",
     size: "1:1",
     count: "1",
     canvasImageCount: "3",
@@ -231,6 +233,7 @@ export const useConfigStore = create<ConfigStore>()(
                         vquality: config.vquality || "720",
                         videoGenerateAudio: config.videoGenerateAudio || "true",
                         videoWatermark: config.videoWatermark || "false",
+                        resolution: config.resolution || "1k",
                         canvasImageCount: config.canvasImageCount || "3",
                         imageModels: mergeSuggestedModelOptions(Array.isArray(persistedConfig.imageModels) ? normalizeModelList(config.imageModels, channels) : [], filterModelsByCapability(models, "image")),
                         videoModels: mergeSuggestedModelOptions(Array.isArray(persistedConfig.videoModels) ? normalizeModelList(config.videoModels, channels) : [], filterModelsByCapability(models, "video")),
