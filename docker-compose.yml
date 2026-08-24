@@ -1,7 +1,10 @@
 services:
   app:
     image: ghcr.io/proapi-hub/prolab:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: prolab
     ports:
-      - "3000:3000"
+      - "${PROLAB_PUBLISH:-3000:3000}"
     restart: unless-stopped
