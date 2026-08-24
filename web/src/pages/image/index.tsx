@@ -1,10 +1,11 @@
-import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, ImagePlus, PenLine, Plus, Sparkles, Trash2, Upload } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ChevronUp, ClipboardPaste, Download, FolderPlus, History, ImagePlus, PenLine, Pin, Plus, Sparkles, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Tag, Tooltip, Typography } from "antd";
 import localforage from "localforage";
 import { saveAs } from "file-saver";
 
-import { ImageSettingsPanel } from "@/components/image-settings-panel";
+import { ImageSettingsPanel, imageQualityLabel, imageSizeLabel } from "@/components/image-settings-panel";
+import { useImageWorkbenchDock } from "@/pages/image/use-image-workbench-dock";
 import { detectModelFamily } from "@/lib/pro-spec/image-body-builder";
 import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
@@ -91,6 +92,7 @@ export default function ImagePage() {
     const model = effectiveConfig.imageModel || effectiveConfig.model;
     const qualityDisabled = detectModelFamily(modelOptionName(model)) === "nano-banana";
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
+    const workbench = useImageWorkbenchDock();
     const canGenerate = Boolean(prompt.trim());
     const generationCount = Math.max(1, Math.min(10, Number(config.count) || 1));
     const displayResults = previewLog ? previewLog.images.map((image) => ({ id: image.id, status: "success" as const, image })) : results;
@@ -158,6 +160,7 @@ export default function ImagePage() {
         setResults(Array.from({ length: generationCount }, () => ({ id: nanoid(), status: "pending" })));
         const batchStartedAt = performance.now();
         setStartedAt(batchStartedAt);
+        workbench.collapseAfterGenerate();
 
         const tasks = Array.from({ length: generationCount }, (_, index) => runGenerationSlot(index, snapshot));
 
@@ -331,7 +334,7 @@ export default function ImagePage() {
     return (
         <div className="flex h-full flex-col overflow-hidden bg-stone-50 text-stone-900 dark:bg-stone-950 dark:text-stone-100">
             <main className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3 lg:overflow-hidden">
-                <div className="grid grid-cols-1 gap-3 lg:min-h-0 lg:flex-1 lg:grid-cols-[280px_minmax(0,1fr)] lg:overflow-hidden">
+                <div className="grid min-h-0 grid-cols-1 gap-3 lg:min-h-0 lg:flex-1 lg:grid-cols-[280px_minmax(0,1fr)] lg:overflow-hidden">
                     <aside className="thin-scrollbar hidden min-h-0 overflow-y-auto rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:block">
                         <LogPanel
                             logs={logs}
@@ -377,13 +380,41 @@ export default function ImagePage() {
                     </div>
                 </div>
 
-                <div className="rounded-lg border border-stone-200 bg-card p-3 shadow-sm dark:border-stone-800">
-                    <div className="mb-2 flex justify-end lg:hidden">
-                        <Button size="small" icon={<History className="size-3.5" />} onClick={() => setLogsOpen(true)}>
-                            生成记录
-                        </Button>
+                <section
+                    className="shrink-0 rounded-lg border border-stone-200 bg-card shadow-sm dark:border-stone-800"
+                    onMouseEnter={workbench.onMouseEnter}
+                    onMouseLeave={workbench.onMouseLeave}
+                    onFocusCapture={workbench.onFocusCapture}
+                    onBlurCapture={workbench.onBlurCapture}
+                >
+                    <div className="flex items-center gap-2 px-3 py-2">
+                        <WorkbenchPinButton pinned={workbench.pinned} onToggle={workbench.togglePin} />
+                        {workbench.expanded ? (
+                            <>
+                                <span className="text-sm text-stone-500 dark:text-stone-400">{workbench.pinned ? "已固定" : "生成后收起"}</span>
+                                <div className="ml-auto lg:hidden">
+                                    <Button size="small" icon={<History className="size-3.5" />} onClick={() => setLogsOpen(true)}>
+                                        生成记录
+                                    </Button>
+                                </div>
+                            </>
+                        ) : (
+                            <>
+                                <ChevronUp className="size-3.5 shrink-0 text-stone-400" aria-hidden />
+                                <p className="min-w-0 flex-1 truncate text-sm text-stone-600 dark:text-stone-300">{prompt.trim() || "划过展开参数，或直接再次生成"}</p>
+                                <span className="hidden shrink-0 text-xs text-stone-500 sm:inline dark:text-stone-400">
+                                    {imageQualityLabel(effectiveConfig.quality || "auto")} · {(effectiveConfig.resolution || "1k").toUpperCase()} · {imageSizeLabel(effectiveConfig.size || "auto")} · {generationCount} 张 · {modelOptionName(model) || "未选模型"}
+                                </span>
+                                <Button type="primary" size="small" icon={<Sparkles className="size-3.5" />} loading={running ? { icon: <ThinkingOrb state="solving" size={16} theme="dark" speed={0.6} /> } : false} disabled={!canGenerate || running} onClick={() => void generate()}>
+                                    {running ? "生成中" : "生成"}
+                                </Button>
+                            </>
+                        )}
                     </div>
 
+                    <div className={`grid transition-[grid-template-rows] duration-300 ease-out motion-reduce:transition-none ${workbench.expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
+                    <div className={`min-h-0 overflow-hidden ${workbench.expanded ? "" : "pointer-events-none"}`} inert={!workbench.expanded || undefined}>
+                    <div className="px-3 pb-3">
                     <div className="grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_320px_minmax(0,1fr)]">
                         <div className="flex flex-col justify-center gap-3 rounded-lg border border-stone-200 p-3 dark:border-stone-800">
                             <div>
@@ -458,7 +489,10 @@ export default function ImagePage() {
                             </Button>
                         </div>
                     </div>
-                </div>
+                    </div>
+                    </div>
+                    </div>
+                </section>
             </main>
             <input
                 ref={fileInputRef}
@@ -496,6 +530,21 @@ export default function ImagePage() {
                 确定删除选中的 {selectedLogIds.length} 条生成记录吗？
             </Modal>
         </div>
+    );
+}
+
+function WorkbenchPinButton({ pinned, onToggle }: { pinned: boolean; onToggle: () => void }) {
+    return (
+        <Tooltip title={pinned ? "取消固定" : "固定工作台，生成后保持展开"}>
+            <Button
+                type={pinned ? "text" : "primary"}
+                size="small"
+                icon={<Pin className={`size-3.5 ${pinned ? "fill-current" : ""}`} />}
+                aria-pressed={pinned}
+                aria-label={pinned ? "取消固定工作台" : "固定工作台"}
+                onClick={onToggle}
+            />
+        </Tooltip>
     );
 }
 
