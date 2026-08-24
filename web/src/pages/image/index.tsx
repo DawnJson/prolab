@@ -405,7 +405,7 @@ export default function ImagePage() {
                                 <span className="hidden shrink-0 text-xs text-stone-500 sm:inline dark:text-stone-400">
                                     {imageQualityLabel(effectiveConfig.quality || "auto")} · {(effectiveConfig.resolution || "1k").toUpperCase()} · {imageSizeLabel(effectiveConfig.size || "auto")} · {generationCount} 张 · {modelOptionName(model) || "未选模型"}
                                 </span>
-                                <Button type="primary" size="small" icon={<Sparkles className="size-3.5" />} loading={running ? { icon: <ThinkingOrb state="solving" size={16} theme="dark" speed={0.6} /> } : false} disabled={!canGenerate || running} onClick={() => void generate()}>
+                                <Button type="primary" size="small" icon={<Sparkles className="size-3.5" />} loading={running ? { icon: <ThinkingOrb state="solving" size={20} theme="dark" speed={0.6} /> } : false} disabled={!canGenerate || running} onClick={() => void generate()}>
                                     {running ? "生成中" : "生成"}
                                 </Button>
                             </>
