@@ -19,6 +19,10 @@ function writePinned(pinned: boolean) {
     }
 }
 
+function blurActive() {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+}
+
 function hasOpenOverlay() {
     return Boolean(
         document.querySelector(
@@ -29,7 +33,7 @@ function hasOpenOverlay() {
 
 export function useImageWorkbenchDock() {
     const [pinned, setPinned] = useState(readPinned);
-    const [collapsed, setCollapsed] = useState(false);
+    const [docked, setDocked] = useState(false);
     const [hovered, setHovered] = useState(false);
     const [focused, setFocused] = useState(false);
     const [desktop, setDesktop] = useState(() => (typeof window === "undefined" ? true : window.matchMedia(DESKTOP_QUERY).matches));
@@ -45,24 +49,28 @@ export function useImageWorkbenchDock() {
 
     useEffect(() => () => window.clearTimeout(leaveTimer.current), []);
 
-    const expanded = !desktop || pinned || hovered || focused || !collapsed;
+    const expanded = !desktop || pinned || !docked || hovered || focused;
 
     const collapseAfterGenerate = useCallback(() => {
-        if (!desktop || pinned) return;
-        setCollapsed(true);
+        if (!desktop) return;
+        const isPinned = readPinned();
+        setPinned(isPinned);
+        setDocked(true);
+        if (isPinned) return;
         setHovered(false);
         setFocused(false);
-        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-    }, [desktop, pinned]);
+        blurActive();
+    }, [desktop]);
 
     const togglePin = useCallback(() => {
-        setPinned((current) => {
-            const next = !current;
-            writePinned(next);
-            if (next) setCollapsed(false);
-            return next;
-        });
-    }, []);
+        const next = !pinned;
+        writePinned(next);
+        setPinned(next);
+        if (next) return;
+        setHovered(false);
+        setFocused(false);
+        blurActive();
+    }, [pinned]);
 
     const onMouseEnter = useCallback(() => {
         if (!desktop) return;
