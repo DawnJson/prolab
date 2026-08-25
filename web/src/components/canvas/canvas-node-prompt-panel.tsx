@@ -56,6 +56,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
 
     return (
         <div
+            data-canvas-no-zoom
             className="rounded-2xl border p-3 shadow-2xl backdrop-blur"
             style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
             onMouseDown={(event) => event.stopPropagation()}
@@ -67,7 +68,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                 references={mentionReferences}
                 onChange={updatePrompt}
                 onSubmit={submit}
-                className="thin-scrollbar h-24 w-full resize-none rounded-xl border px-3 py-2 text-sm leading-5 outline-none"
+                className="thin-scrollbar h-24 w-full resize-none overflow-y-auto rounded-xl border px-3 py-2 text-sm leading-5 outline-none"
                 style={{ background: theme.node.fill, borderColor: theme.node.stroke, color: theme.node.text }}
                 placeholder={promptPlaceholder(mode, hasImageContent, hasTextContent)}
             />
@@ -82,7 +83,6 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                             placement="topLeft"
                             buttonClassName="!h-10 !w-[220px] !min-w-[220px] !max-w-[220px] shrink-0 !justify-center !rounded-full !px-3"
                             onConfigChange={(key, value) => onConfigChange(node.id, key === "count" ? { count: Number(value) || 1 } : { [key]: value })}
-                            onMissingConfig={() => openConfigDialog(true)}
                             onOpenChange={onImageSettingsOpenChange}
                         />
                     </>

@@ -90,6 +90,9 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
         ...(style || {}),
         color: showOverlay ? "transparent" : style?.color,
         caretColor: style?.color || theme.node.text,
+        WebkitTextFillColor: showOverlay ? "transparent" : undefined,
+        position: "relative",
+        zIndex: 1,
         ...(showOverlay ? { background: "transparent", backgroundColor: "transparent" } : {}),
     } as CSSProperties;
     const menu = mention && candidates.length && textareaRef.current ? <MentionMenu textarea={textareaRef.current} references={candidates} activeIndex={Math.min(activeIndex, candidates.length - 1)} theme={theme} onSelect={insertReference} /> : null;
@@ -97,7 +100,7 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
     return (
         <div className={`relative h-full w-full ${containerClassName || ""}`}>
             {showOverlay ? (
-                <div ref={overlayRef} className={`${className || ""} pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words`} style={{ ...style, color: theme.node.text }}>
+                <div ref={overlayRef} className={`${className || ""} pointer-events-none absolute inset-0 z-0 overflow-hidden whitespace-pre-wrap break-words`} style={{ ...style, color: theme.node.text }}>
                     <MentionHighlightText value={value || props.placeholder?.toString() || ""} labels={activeLabels} placeholder={!value} />
                 </div>
             ) : null}
@@ -189,7 +192,7 @@ function MentionHighlightText({ value, labels, placeholder }: { value: string; l
         <>
             {value.split(pattern).map((part, index) =>
                 labels.includes(part) ? (
-                    <span key={`${part}-${index}`} className="rounded-md bg-[#2f80ff]/16 px-1 py-0.5 font-medium text-[#2f80ff] ring-1 ring-[#2f80ff]/24">
+                    <span key={`${part}-${index}`} className="rounded-md bg-[#2f80ff]/16 text-[#2f80ff] ring-1 ring-[#2f80ff]/24">
                         {part}
                     </span>
                 ) : (

@@ -12,12 +12,9 @@ import { useThemeStore } from "@/stores/use-theme-store";
 type CanvasImageSettingsPopoverProps = {
     config: AiConfig;
     onConfigChange: (key: keyof AiConfig, value: string) => void;
-    onMissingConfig?: () => void;
     onOpenChange?: (open: boolean) => void;
     buttonClassName?: string;
-    getPopupContainer?: (triggerNode: HTMLElement) => HTMLElement;
     placement?: "topLeft" | "top" | "topRight" | "bottomLeft" | "bottom" | "bottomRight";
-    autoAdjustOverflow?: boolean;
 };
 
 export function CanvasImageSettingsPopover({ config, onConfigChange, onOpenChange, buttonClassName, placement = "topLeft" }: CanvasImageSettingsPopoverProps) {
@@ -117,12 +114,13 @@ function ImageSettingsPortal({
         <div
             ref={panelRef}
             className="canvas-image-settings-popover"
+            data-canvas-no-zoom
             style={style}
             onPointerDown={(event) => event.stopPropagation()}
             onMouseDown={(event) => event.stopPropagation()}
             onClick={(event) => event.stopPropagation()}
         >
-            <ImageSettingsPanel config={config} onConfigChange={(key, value) => onConfigChange(key, value)} theme={theme} className="space-y-4" qualityDisabled={qualityDisabled} />
+            <ImageSettingsPanel config={config} onConfigChange={onConfigChange} theme={theme} showTitle={false} className="space-y-4" qualityDisabled={qualityDisabled} />
         </div>,
         document.body,
     );
